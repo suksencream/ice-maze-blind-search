@@ -5,6 +5,8 @@ import time
 import os
 import math
 import random
+import heapq
+from openpyxl import Workbook, load_workbook
 
 # Initialize Pygame
 pygame.init()
@@ -289,6 +291,86 @@ class SearchAlgorithm:
                 if nst not in seen:
                     stack.append((nb, has_key, path + [nb]))
         return False
+    
+    def heuristic(self, a, b, heuristic_type="manhattan"):
+        if heuristic_type == "euclidean":
+            return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2)
+        else:  # default manhattan
+            return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+    def a_star_with_key(self, start, goal, key_pos, has_key_start=False, heuristic_type="manhattan"):
+        self.reset()
+        self.algorithm_used = f"A* with Key ({heuristic_type.title()})"
+
+        pq = []
+        heapq.heappush(pq, (0, start, has_key_start, [start]))
+        g_cost = {(start, has_key_start): 0}
+        seen = set()
+
+        while pq:
+            _, cur, has_key, path = heapq.heappop(pq)
+            st = (cur, has_key)
+            if st in seen:
+                continue
+            seen.add(st)
+
+            self.search_order.append(cur)
+            self.nodes_expanded += 1
+            self.explored.add(cur)
+
+            # When key is picked up, ensure new state exists in g_cost
+            if cur == key_pos and not has_key:
+                has_key = True
+                g_cost[(cur, has_key)] = g_cost.get((cur, False), 0)
+
+            if cur == goal and has_key:
+                self.path = path
+                return True
+
+            for nb in self.get_neighbors(cur):
+                if nb == goal and not has_key:
+                    continue
+                new_cost = g_cost[(cur, has_key)] + 1
+                nst = (nb, has_key)
+                if nst not in g_cost or new_cost < g_cost[nst]:
+                    g_cost[nst] = new_cost
+                    priority = new_cost + self.heuristic(nb, goal, heuristic_type)
+                    heapq.heappush(pq, (priority, nb, has_key, path + [nb]))
+        return False
+
+    def greedy_with_key(self, start, goal, key_pos, has_key_start=False, heuristic_type="manhattan"):
+        self.reset()
+        self.algorithm_used = f"Greedy with Key ({heuristic_type.title()})"
+
+        pq = []
+        heapq.heappush(pq, (0, start, has_key_start, [start]))
+        seen = set()
+
+        while pq:
+            _, cur, has_key, path = heapq.heappop(pq)
+            st = (cur, has_key)
+            if st in seen:
+                continue
+            seen.add(st)
+
+            self.search_order.append(cur)
+            self.nodes_expanded += 1
+            self.explored.add(cur)
+
+            if cur == key_pos:
+                has_key = True
+            if cur == goal and has_key:
+                self.path = path
+                return True
+
+            for nb in self.get_neighbors(cur):
+                if nb == goal and not has_key:
+                    continue
+                nst = (nb, has_key)
+                if nst not in seen:
+                    priority = self.heuristic(nb, goal, heuristic_type)
+                    heapq.heappush(pq, (priority, nb, has_key, path + [nb]))
+        return False
 
 # ---------------------------
 # Game
@@ -319,6 +401,7 @@ class StarWarsIceMazeGame:
         self.player_pos = self.maze.start_pos
         self.manual_mode = True
         self.current_algorithm = None
+        self.heuristic_used = 'manhattan'
         self.visualization_step = 0
         self.animating = False
         self.animation_speed = 8
@@ -360,6 +443,68 @@ class StarWarsIceMazeGame:
             except Exception:
                 images[name] = None
         return images
+    
+    # ---------- Comparisons ------------
+
+    def benchmark_algorithms(self, filename="search_benchmark.xlsx"):
+        # Algorithms to run (Greedy Euclidean re-added)
+        algorithms = [
+            ("BFS", self.search.bfs_with_key, {
+                "start": self.player_pos, "goal": self.maze.goal_pos,
+                "key_pos": self.maze.key_pos, "has_key_start": self.maze.key_collected}),
+            ("DFS", self.search.dfs_with_key, {
+                "start": self.player_pos, "goal": self.maze.goal_pos,
+                "key_pos": self.maze.key_pos, "has_key_start": self.maze.key_collected}),
+            ("A* (Manhattan)", self.search.a_star_with_key, {
+                "start": self.player_pos, "goal": self.maze.goal_pos,
+                "key_pos": self.maze.key_pos, "has_key_start": self.maze.key_collected,
+                "heuristic_type": "manhattan"}),
+            ("A* (Euclidean)", self.search.a_star_with_key, {
+                "start": self.player_pos, "goal": self.maze.goal_pos,
+                "key_pos": self.maze.key_pos, "has_key_start": self.maze.key_collected,
+                "heuristic_type": "euclidean"}),
+            ("Greedy (Manhattan)", self.search.greedy_with_key, {
+                "start": self.player_pos, "goal": self.maze.goal_pos,
+                "key_pos": self.maze.key_pos, "has_key_start": self.maze.key_collected,
+                "heuristic_type": "manhattan"}),
+            ("Greedy (Euclidean)", self.search.greedy_with_key, {
+                "start": self.player_pos, "goal": self.maze.goal_pos,
+                "key_pos": self.maze.key_pos, "has_key_start": self.maze.key_collected,
+                "heuristic_type": "euclidean"})
+        ]
+
+        results = []
+
+        print(f"\n===== Running Benchmarks for Level {self.current_level} =====\n")
+
+        for name, func, kwargs in algorithms:
+            # Run algorithm
+            start_t = time.perf_counter()
+            func(**kwargs)  # search functions update self.search.path and self.search.nodes_expanded
+            runtime = round(time.perf_counter() - start_t, 6)
+
+            # Read metrics from the search object (safer than assuming a return value)
+            nodes_expanded = getattr(self.search, "nodes_expanded", None)
+            path_length = len(getattr(self.search, "path", [])) if getattr(self.search, "path", None) is not None else 0
+
+            results.append((self.current_level, name, runtime, nodes_expanded, path_length))
+            print(f"{name:<25} | Runtime: {runtime:.6f}s | Nodes Expanded: {nodes_expanded} | Path Len: {path_length}")
+
+        # Append results to Excel file (no timestamps)
+        file_exists = os.path.exists(filename)
+        if file_exists:
+            wb = load_workbook(filename)
+            ws = wb.active
+        else:
+            wb = Workbook()
+            ws = wb.active
+            ws.append(["Level", "Algorithm", "Runtime (s)", "Nodes Expanded", "Path Length"])
+
+        for level, name, runtime, nodes, path_len in results:
+            ws.append([level, name, runtime, nodes, path_len])
+
+        wb.save(filename)
+        print(f"\n✅ Results saved to: {filename}\n")
 
     # ---------- Enemies ----------
     def _load_enemies(self):
@@ -513,6 +658,18 @@ class StarWarsIceMazeGame:
                         self.start_bfs()
                     elif event.key == pygame.K_d and not self.animating:
                         self.start_dfs()
+                    elif event.key == pygame.K_u and not self.animating:
+                        self.start_a_star(heuristic_type=self.heuristic_used)
+                    elif event.key == pygame.K_i and not self.animating:
+                        self.start_greedy(heuristic_type=self.heuristic_used)
+                    elif event.key == pygame.K_o and not self.animating:
+                        if self.heuristic_used == 'manhattan':
+                            self.heuristic_used = 'euclidean'
+                        else:
+                            self.heuristic_used = 'manhattan'
+                        print("Changed to "+self.heuristic_used)
+                    elif event.key == pygame.K_p and not self.animating:
+                        self.benchmark_algorithms()
                     elif event.key == pygame.K_a and self.solution_found and not self.autopilot and self.drawn_path:
                         if self.search.path:
                             self.autopilot = True
@@ -558,6 +715,32 @@ class StarWarsIceMazeGame:
             goal=self.maze.goal_pos,
             key_pos=self.maze.key_pos,
             has_key_start=self.maze.key_collected
+        )
+        self.visualization_step = 0
+        self.animating = True
+        self.manual_mode = False
+
+    def start_a_star(self, heuristic_type="manhattan"):
+        self.current_algorithm = f"RESISTANCE PATHFINDER (A*) [{heuristic_type.title()}]"
+        self.solution_found = self.search.a_star_with_key(
+            start=self.player_pos,
+            goal=self.maze.goal_pos,
+            key_pos=self.maze.key_pos,
+            has_key_start=self.maze.key_collected,
+            heuristic_type=heuristic_type
+        )
+        self.visualization_step = 0
+        self.animating = True
+        self.manual_mode = False
+
+    def start_greedy(self, heuristic_type="manhattan"):
+        self.current_algorithm = f"IMPERIAL SEEKER (Greedy) [{heuristic_type.title()}]"
+        self.solution_found = self.search.greedy_with_key(
+            start=self.player_pos,
+            goal=self.maze.goal_pos,
+            key_pos=self.maze.key_pos,
+            has_key_start=self.maze.key_collected,
+            heuristic_type=heuristic_type
         )
         self.visualization_step = 0
         self.animating = True
