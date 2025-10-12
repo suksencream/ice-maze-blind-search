@@ -10,9 +10,15 @@ from openpyxl import Workbook, load_workbook
 
 # Initialize Pygame
 pygame.init()
-pygame.mixer.init()
-pygame.mixer.music.load("game_theme.mp3")  # replace with your mp3 filename
-pygame.mixer.music.play(-1)  # -1 makes it loop indefinitely, use 0 to play once
+try:
+    pygame.mixer.init()
+    if os.path.exists("game_theme.mp3"):
+        pygame.mixer.music.load("game_theme.mp3")
+        pygame.mixer.music.play(-1)  # loop
+    else:
+        print("Audio disabled: game_theme.mp3 not found")
+except Exception as e:
+    print("Audio disabled:", e)
 # ---------------------------
 # Constants / Colors
 # ---------------------------
@@ -37,6 +43,8 @@ HOTH_WHITE = (245, 245, 255)
 CONSOLE_GREEN = (0, 255, 127)
 HOLOGRAM_CYAN = (0, 255, 255)
 KEY_GOLD = (255, 215, 0)
+A_STAR_YELLOW = (255, 165, 0)     # path/expansion for A*
+GREEDY_PINK   = (255, 105, 180)     # path/expansion for Greedy (hot pink)
 
 # ---------------------------
 # Maze (MULTI-LEVEL)
@@ -448,29 +456,33 @@ class StarWarsIceMazeGame:
 
     def benchmark_algorithms(self, filename="search_benchmark.xlsx"):
         # Algorithms to run (Greedy Euclidean re-added)
+        start_pos = self.maze.start_pos
+        goal_pos  = self.maze.goal_pos
+        key_pos   = self.maze.key_pos
+        has_key   = False
         algorithms = [
             ("BFS", self.search.bfs_with_key, {
-                "start": self.player_pos, "goal": self.maze.goal_pos,
-                "key_pos": self.maze.key_pos, "has_key_start": self.maze.key_collected}),
+                "start": start_pos, "goal": goal_pos,
+                "key_pos": key_pos, "has_key_start": has_key}),
             ("DFS", self.search.dfs_with_key, {
-                "start": self.player_pos, "goal": self.maze.goal_pos,
-                "key_pos": self.maze.key_pos, "has_key_start": self.maze.key_collected}),
+                "start": start_pos, "goal": goal_pos,
+                "key_pos": key_pos, "has_key_start": has_key}),
             ("A* (Manhattan)", self.search.a_star_with_key, {
-                "start": self.player_pos, "goal": self.maze.goal_pos,
-                "key_pos": self.maze.key_pos, "has_key_start": self.maze.key_collected,
+                "start": start_pos, "goal": goal_pos,
+                "key_pos": key_pos, "has_key_start": has_key,
                 "heuristic_type": "manhattan"}),
             ("A* (Euclidean)", self.search.a_star_with_key, {
-                "start": self.player_pos, "goal": self.maze.goal_pos,
-                "key_pos": self.maze.key_pos, "has_key_start": self.maze.key_collected,
+                "start": start_pos, "goal": goal_pos,
+                "key_pos": key_pos, "has_key_start": has_key,
                 "heuristic_type": "euclidean"}),
             ("Greedy (Manhattan)", self.search.greedy_with_key, {
-                "start": self.player_pos, "goal": self.maze.goal_pos,
-                "key_pos": self.maze.key_pos, "has_key_start": self.maze.key_collected,
+                "start": start_pos, "goal": goal_pos,
+                "key_pos": key_pos, "has_key_start": has_key,
                 "heuristic_type": "manhattan"}),
             ("Greedy (Euclidean)", self.search.greedy_with_key, {
-                "start": self.player_pos, "goal": self.maze.goal_pos,
-                "key_pos": self.maze.key_pos, "has_key_start": self.maze.key_collected,
-                "heuristic_type": "euclidean"})
+                "start": start_pos, "goal": goal_pos,
+                "key_pos": key_pos, "has_key_start": has_key,
+                "heuristic_type": "euclidean"}),
         ]
 
         results = []
@@ -866,6 +878,23 @@ class StarWarsIceMazeGame:
         pygame.draw.circle(self.screen, (180, 30, 30), (cx, cy), CELL_SIZE // 3)
         pygame.draw.circle(self.screen, (255, 80, 80), (cx, cy), CELL_SIZE // 3, 2)
 
+    def _algo_viz_colors(self):
+        """
+        Returns (expansion_overlay_color, path_color) based on current algorithm name.
+        """
+        name = "" if self.current_algorithm is None else str(self.current_algorithm)
+        if "BFS" in name:
+            return SABER_BLUE, SABER_BLUE            # blue
+        if "DFS" in name:
+            return EMPIRE_RED, EMPIRE_RED            # red
+        if "A*" in name:
+            return A_STAR_YELLOW, A_STAR_YELLOW      # yellow
+        if "Greedy" in name:
+            return GREEDY_PINK, GREEDY_PINK          # pink
+        # default fallback
+        return HOLOGRAM_CYAN, HOLOGRAM_CYAN
+
+
     def draw_grid(self):
         self.screen.fill(SPACE_BLACK)
         random.seed(42 + self.current_level)
@@ -889,19 +918,20 @@ class StarWarsIceMazeGame:
 
         # Search viz (expansion order)
         if not self.manual_mode and self.search.search_order:
+            exp_color, _ = self._algo_viz_colors()
             for i in range(min(self.visualization_step, len(self.search.search_order))):
                 pos = self.search.search_order[i]
-                color = SABER_BLUE if "BFS" in str(self.current_algorithm) else EMPIRE_RED
                 s = pygame.Surface((CELL_SIZE - 10, CELL_SIZE - 10))
-                s.set_alpha(80); s.fill(color)
+                s.set_alpha(80); s.fill(exp_color)
                 self.screen.blit(s, (pos[0]*CELL_SIZE + 5, pos[1]*CELL_SIZE + 5))
 
         # Solution path (only in AI mode)
         if not self.manual_mode and not self.animating and self.solution_found and self.search.path:
             for pos in self.search.path:
-                if pos in (self.maze.start_pos, self.maze.goal_pos): continue
+                if pos in (self.maze.start_pos, self.maze.goal_pos):
+                    continue
                 s = pygame.Surface((CELL_SIZE - 30, CELL_SIZE - 30))
-                s.set_alpha(128); s.fill(JEDI_GREEN)
+                s.set_alpha(128); s.fill(JEDI_GREEN)  # always green for final path
                 self.screen.blit(s, (pos[0]*CELL_SIZE + 15, pos[1]*CELL_SIZE + 15))
             self.drawn_path = True
 
@@ -921,23 +951,40 @@ class StarWarsIceMazeGame:
 
     # ---------- UI helpers (wrap & fit) ----------
     def _blit_wrapped(self, text, font, color, x, y, max_width, line_gap=2):
-        """Render text with soft-wrapping inside max_width. Returns new y after drawing."""
         words = text.split(' ')
         line = ""
+
+        def blit_line(s):
+            surf = font.render(s, True, color)
+            self.screen.blit(surf, (x, y))
+            return y + surf.get_height() + line_gap
+
         for w in words:
             test = (line + " " + w).strip()
             if font.size(test)[0] <= max_width:
                 line = test
             else:
-                surf = font.render(line, True, color)
-                self.screen.blit(surf, (x, y))
-                y += surf.get_height() + line_gap
-                line = w
+                if line:  # flush current line
+                    y = blit_line(line)
+                    line = ""
+
+                # word itself too long? hard-wrap by characters
+                if font.size(w)[0] > max_width:
+                    chunk = ""
+                    for ch in w:
+                        if font.size(chunk + ch)[0] <= max_width:
+                            chunk += ch
+                        else:
+                            y = blit_line(chunk)
+                            chunk = ch
+                    line = chunk  # remainder
+                else:
+                    line = w
+
         if line:
-            surf = font.render(line, True, color)
-            self.screen.blit(surf, (x, y))
-            y += surf.get_height() + line_gap
+            y = blit_line(line)
         return y
+
 
     def _render_title_fit(self, text, base_size, color, max_width):
         """Return a surface for title text that is scaled down to fit max_width."""
@@ -1003,6 +1050,66 @@ class StarWarsIceMazeGame:
             t = self.console_font.render(opt, True, HOLOGRAM_CYAN)
             self.screen.blit(t, t.get_rect(center=(WINDOW_WIDTH//2, WINDOW_HEIGHT//2 + 20 + 28*i)))
 
+    def _current_algo_short(self):
+        name = self.current_algorithm or ""
+        if "BFS" in name:    return "BFS"
+        if "DFS" in name:    return "DFS"
+        if "A*" in name:     return "A*"
+        if "Greedy" in name: return "Greedy"
+        return "—"
+
+    def _draw_mode_badge(self, x, y, w):
+        """
+        Footer badge showing current mode, heuristic, algorithm, and autopilot status.
+        Draws a dark card with a colored pill.
+        """
+        # card
+        h = 90
+        card = pygame.Rect(x - 10, y, w, h)
+        pygame.draw.rect(self.screen, (20, 25, 35), card, border_radius=12)
+        pygame.draw.rect(self.screen, HOLOGRAM_CYAN, card, width=2, border_radius=12)
+
+        # pill
+        pill_w, pill_h = 150, 28
+        pill = pygame.Rect(card.x + 12, card.y + 10, pill_w, pill_h)
+        pill_color = JEDI_GREEN if self.manual_mode else HOLOGRAM_CYAN
+        pygame.draw.rect(self.screen, pill_color, pill, border_radius=14)
+
+        # pill label
+        pill_text = "HUMAN MODE" if self.manual_mode else "AI MODE"
+        label = self.console_font.render(pill_text, True, SPACE_BLACK)
+        self.screen.blit(label, label.get_rect(center=pill.center))
+
+        # details (right side)
+        info_x = pill.right + 10
+        info_y = card.y + 10
+        text_area_w = card.right - info_x - 12   # right padding
+
+        # Heuristic (AI only)
+        if not self.manual_mode:
+            info_y = self._blit_wrapped(
+                f"Heuristic: {self.heuristic_used.title()}",
+                self.console_font, HOTH_WHITE, info_x, info_y, text_area_w, line_gap=2
+            )
+
+        # Short algorithm label + heuristic suffix for A*/Greedy
+        short = self._current_algo_short()
+        suffix = f" ({self.heuristic_used.title()})" if (short in ("A*", "Greedy") and not self.manual_mode) else ""
+        algo_color = REBEL_ORANGE if short != "—" else HOTH_WHITE
+        info_y = self._blit_wrapped(
+            f"Algorithm: {short}{suffix}",
+            self.console_font, algo_color, info_x, info_y, text_area_w, line_gap=2
+        )
+
+        # Autopilot
+        ap_text  = "ON" if self.autopilot else "OFF"
+        ap_color = JEDI_GREEN if self.autopilot else HOTH_WHITE
+        self._blit_wrapped(
+            f"Autopilot: {ap_text}",
+            self.console_font, ap_color, info_x, info_y, text_area_w, line_gap=2
+        )
+
+
     def draw_ui(self):
         ui_x = GRID_WIDTH * CELL_SIZE + 20
         ui_y = 20
@@ -1037,17 +1144,24 @@ class StarWarsIceMazeGame:
             ]
         else:
             lines += [
-                "B - BFS (AI mode)   D - DFS (AI mode)",
+                "B - BFS (AI mode)",
+                "D - DFS (AI mode)",
+                "U - A* (AI mode)",
+                "I - Greedy (AI mode)",
+                "O - Toggle Heuristic (Manhattan ↔ Euclidean)",
+                "P - Benchmark (save to Excel)",
                 "A - Autopilot (after scan)",
                 "R - Reset current level",
                 "M - Toggle Human/AI",
                 "ESC - Main menu",
-            ]
+        ]
 
         if self.current_algorithm and not self.manual_mode:
+            short = self._current_algo_short()
+            suffix = f" ({self.heuristic_used.title()})" if short in ("A*", "Greedy") else ""
             lines += [
                 "",
-                f"SCANNER: {self.current_algorithm}",
+                f"SCANNER: {short}{suffix}",
                 f"SECTORS: {len(self.search.explored)}",
                 f"STATUS: {'ROUTE FOUND' if self.solution_found else 'SEARCHING...'}",
             ]
@@ -1069,6 +1183,10 @@ class StarWarsIceMazeGame:
             else:
                 col = HOTH_WHITE
             ui_y = self._blit_wrapped(line, self.console_font, col, ui_x, ui_y, max_text_w, line_gap=2)
+
+        # footer badge
+        footer_y = WINDOW_HEIGHT - 40 - 90  # leave 40px bottom padding and 90px badge height
+        self._draw_mode_badge(ui_x, footer_y, panel_w)
 
         # scanlines effect
         for i in range(0, WINDOW_HEIGHT, 4):
